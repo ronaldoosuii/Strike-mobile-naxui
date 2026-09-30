@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Strike Mobile</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#080b10;color:#fff;font-family:Arial,sans-serif;touch-action:none}
+canvas{display:block;width:100%;height:100%;background:#111820}
+#hud{position:fixed;inset:0;pointer-events:none}
+.top{display:flex;justify-content:space-between;padding:12px 16px;font-weight:700;text-shadow:0 2px 4px #000}
+.badge{background:#0009;border:1px solid #ffffff22;border-radius:10px;padding:7px 10px}
+#ammo{font-size:24px}
+#cross{position:fixed;left:50%;top:50%;width:22px;height:22px;transform:translate(-50%,-50%);pointer-events:none}
+#cross:before,#cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 3px #000}
+#cross:before{width:2px;height:22px;left:10px;top:0}.cross:after{height:2px;width:22px;top:10px;left:0}
+#message{position:fixed;left:50%;top:42%;transform:translate(-50%,-50%);font-size:30px;font-weight:900;text-align:center;text-shadow:0 3px 10px #000;display:none}
+#controls{position:fixed;inset:0;pointer-events:none}
+.stick{position:absolute;width:130px;height:130px;border-radius:50%;background:#ffffff12;border:2px solid #ffffff22;pointer-events:auto;display:none}
+.knob{position:absolute;width:58px;height:58px;left:34px;top:34px;border-radius:50%;background:#ffffff38;border:2px solid #fff6}
+#leftStick{left:18px;bottom:24px}#rightStick{right:18px;bottom:24px}
+.btn{position:absolute;pointer-events:auto;border:1px solid #fff4;background:#0008;color:#fff;border-radius:50%;font-weight:800}
+#fire{right:28px;bottom:178px;width:78px;height:78px;background:#b51e2b99}
+#reload{right:125px;bottom:112px;width:58px;height:58px}
+#jump{right:28px;bottom:94px;width:58px;height:58px}
+#start{position:fixed;inset:0;background:linear-gradient(145deg,#080b10,#152332);display:flex;align-items:center;justify-content:center;z-index:5}
+.panel{width:min(90%,420px);padding:28px;border:1px solid #ffffff20;background:#0009;border-radius:20px;text-align:center;box-shadow:0 15px 60px #000}
+.panel h1{font-size:38px;margin:0 0 8px}.panel p{color:#b8c2ce;line-height:1.5}
+#play{border:0;border-radius:12px;padding:15px 28px;background:#e5a900;color:#111;font-size:19px;font-weight:900}
+.small{font-size:12px;color:#8793a0}
+@media (min-width:800px){.stick{display:block}.btn{display:block}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+  <div class="top">
+    <div class="badge">❤️ <span id="hp">100</span> &nbsp; 🛡️ <span id="armor">100</span></div>
+    <div class="badge">Раунд <span id="round">1</span> · <span id="score">0 : 0</span></div>
+    <div class="badge" id="ammo">12 / 48</div>
+  </div>
+  <div id="cross"></div><div id="message"></div>
+</div>
+<div id="controls">
+  <div class="stick" id="leftStick"><div class="knob"></div></div>
+  <div class="stick" id="rightStick"><div class="knob"></div></div>
+  <button class="btn" id="fire">FIRE</button>
+  <button class="btn" id="reload">↻</button>
+  <button class="btn" id="jump">RUN</button>
+</div>
+<div id="start"><div class="panel">
+  <h1>STRIKE MOBILE</h1>
+  <p>Тактический браузерный шутер в духе классических 5v5 FPS. Управление создано для телефона.</p>
+  <button id="play">ИГРАТЬ</button>
+  <p class="small">Левый круг — движение · правый — обзор · FIRE — стрельба · ↻ — перезарядка</p>
+</div></div>
+<script>
+"use strict";
+const c=document.getElementById('game'),ctx=c.getContext('2d');
+let W=0,H=0,dpr=1;
+function resize(){dpr=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;c.width=W*dpr;c.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+
+const map=[
+"111111111111111111",
+"100000000000000001",
+"100011100011100001",
+"100010000010000001",
+"100010111110111001",
+"100000100000001001",
+"101110101111101001",
+"100000100000101001",
+"100111111110101001",
+"100000000010101001",
+"101111011010101001",
+"100001000000100001",
+"100001111111100001",
+"100000000000000001",
+"111111111111111111"
+];
+const MW=map[0].length,MH=map.length;
+const walls=[];
+for(let y=0;y<MH;y++)for(let x=0;x<MW;x++)if(map[y][x]==="1")walls.push({x,y});
+
+let player,enemies,bullets,round=1,score=[0,0],running=false,roundEnd=0;
+const keys={};
+let firing=false,reloading=false,last=performance.now();
+
+function resetRound(){
+ player={x:2.2,y:11.5,a:0,hp:100,armor:100,mag:12,reserve:48,shootCd:0,reload:0};
+ enemies=[];
+ const spots=[[15.2,2.2],[14.2,12.2],[10.8,3.2],[12.2,8.2]];
+ for(const [x,y] of spots) enemies.push({x,y,a:Math.PI,hp:100,cd:.3+Math.random(),alive:true});
+ bullets=[];reloading=false;roundEnd=0;
+}
+function wall(x,y){return x<0||y<0||x>=MW||y>=MH||map[Math.floor(y)][Math.floor(x)]==="1"}
+function canMove(x,y,r=.2){
+ return !wall(x-r,y-r)&&!wall(x+r,y-r)&&!wall(x-r,y+r)&&!wall(x+r,y+r)
+}
+function moveObj(o,dx,dy){
+ const nx=o.x+dx,ny=o.y+dy;
+ if(canMove(nx,o.y,.18))o.x=nx;
+ if(canMove(o.x,ny,.18))o.y=ny;
+}
+function norm(a){return Math.atan2(Math.sin(a),Math.cos(a))}
+function angleTo(x1,y1,x2,y2){return Math.atan2(y2-y1,x2-x1)}
+function clearShot(x1,y1,x2,y2){
+ const d=Math.hypot(x2-x1,y2-y1),n=Math.ceil(d*12);
+ for(let i=1;i<n;i++){let t=i/n;if(wall(x1+(x2-x1)*t,y1+(y2-y1)*t))return false}return true
+}
+function shoot(){
+ if(!running||reloading||player.shootCd>0)return;
+ if(player.mag<=0){reload();return}
+ player.mag--;player.shootCd=.13;
+ bullets.push({x:player.x,y:player.y,a:player.a,s:15,life:1.1,enemy:false});
+}
+function reload(){if(player.mag<12&&player.reserve>0&&!reloading)player.reload=1.15,reloading=true}
+function damagePlayer(d){
+ let a=Math.min(player.armor,d*.55), hp=d-a*.55;player.armor-=a;player.hp-=hp;
+ if(player.hp<=0){player.hp=0;endRound(false)}
+}
+function endRound(win){
+ if(roundEnd)return;roundEnd=2.2;score[win?0:1]++;
+ const m=document.getElementById('message');m.style.display='block';m.textContent=win?'РАУНД ПОБЕДА':'РАУНД ПРОИГРАН';
+ setTimeout(()=>{if(roundEnd){round++;resetRound();m.style.display='none'}},2200)
+}
+function update(dt){
+ if(!running||roundEnd)return;
+ player.shootCd=Math.max(0,player.shootCd-dt);
+ if(reloading){player.reload-=dt;if(player.reload<=0){let n=Math.min(12-player.mag,player.reserve);player.mag+=n;player.reserve-=n;reloading=false}}
+ // movement
+ let mx=0,my=0;
+ if(keys.w||keys.ArrowUp)my-=1;if(keys.s||keys.ArrowDown)my+=1;if(keys.a||keys.ArrowLeft)mx-=1;if(keys.d||keys.ArrowRight)mx+=1;
+ if(touchMove.x||touchMove.y){mx=touchMove.x;my=touchMove.y}
+ let l=Math.hypot(mx,my);if(l>1){mx/=l;my/=l}
+ moveObj(player,mx*3.0*dt,my*3.0*dt);
+ if(firing)shoot();
+ // enemies
+ let alive=0;
+ for(const e of enemies)if(e.alive){
+   alive++;
+   const dx=player.x-e.x,dy=player.y-e.y,d=Math.hypot(dx,dy);
+   e.a=angleTo(e.x,e.y,player.x,player.y);
+   if(d>3.2){moveObj(e,dx/d*1.0*dt,dy/d*1.0*dt)}
+   e.cd-=dt;
+   if(d<8&&e.cd<=0&&clearShot(e.x,e.y,player.x,player.y)){
+     e.cd=.65+Math.random()*.7;
+     bullets.push({x:e.x,y:e.y,a:e.a,s:10,life:1.2,enemy:true});
+   }
+ }
+ if(alive===0)endRound(true);
+ // bullets
+ for(const b of bullets){
+   b.x+=Math.cos(b.a)*b.s*dt;b.y+=Math.sin(b.a)*b.s*dt;b.life-=dt;
+   if(wall(b.x,b.y))b.life=0;
+   if(!b.enemy&&b.life>0)for(const e of enemies)if(e.alive&&Math.hypot(e.x-b.x,e.y-b.y)<.35){e.hp-=34;b.life=0;if(e.hp<=0)e.alive=false;break}
+   if(b.enemy&&b.life>0&&Math.hypot(player.x-b.x,player.y-b.y)<.3){damagePlayer(18);b.life=0}
+ }
+ bullets=bullets.filter(b=>b.life>0);
+ if(player.reserve===0&&player.mag===0){} 
+ document.getElementById('hp').textContent=Math.round(player.hp);
+ document.getElementById('armor').textContent=Math.round(player.armor);
+ document.getElementById('ammo').textContent=reloading?'ПЕРЕЗАРЯДКА':`${player.mag} / ${player.reserve}`;
+ document.getElementById('round').textContent=round;
+ document.getElementById('score').textContent=score[0]+' : '+score[1];
+}
+function render(){
+ ctx.clearRect(0,0,W,H);
+ const scale=Math.min(W/(MW*.62),H/(MH*.72));
+ const vw=W/scale,vh=H/scale;
+ let camx=player.x-vw/2,camy=player.y-vh/2;
+ camx=Math.max(0,Math.min(MW-vw,camx));camy=Math.max(0,Math.min(MH-vh,camy));
+ ctx.save();ctx.scale(scale,scale);ctx.translate(-camx,-camy);
+ // floor
+ ctx.fillStyle="#182129";ctx.fillRect(0,0,MW,MH);
+ for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){
+   if(map[y][x]==="1"){ctx.fillStyle="#35414a";ctx.fillRect(x,y,1,1);ctx.strokeStyle="#46545e";ctx.strokeRect(x,y,1,1)}
+   else{ctx.fillStyle=((x+y)%2?"#1b252d":"#1e2931");ctx.fillRect(x,y,1,1)}
+ }
+ // bullets
+ for(const b of bullets){ctx.fillStyle=b.enemy?"#ff6b6b":"#ffe08a";ctx.beginPath();ctx.arc(b.x,b.y,.07,0,7);ctx.fill()}
+ // enemies
+ for(const e of enemies)if(e.alive){
+   ctx.save();ctx.translate(e.x,e.y);ctx.rotate(e.a);ctx.fillStyle="#c53b46";ctx.fillRect(-.22,-.22,.44,.44);ctx.fillStyle="#eee";ctx.fillRect(.05,-.06,.28,.12);ctx.restore();
+ }
+ // player
+ ctx.save();ctx.translate(player.x,player.y);ctx.rotate(player.a);ctx.fillStyle="#35a7ff";ctx.beginPath();ctx.arc(0,0,.24,0,7);ctx.fill();ctx.fillStyle="#fff";ctx.fillRect(.1,-.06,.34,.12);ctx.restore();
+ ctx.restore();
+ // dark vignette
+ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*.25,W/2,H/2,Math.max(W,H)*.7);g.addColorStop(0,"transparent");g.addColorStop(1,"#0008");ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+}
+function loop(t){let dt=Math.min(.033,(t-last)/1000);last=t;update(dt);render();requestAnimationFrame(loop)}requestAnimationFrame(loop);
+
+// Keyboard
+addEventListener('keydown',e=>{keys[e.key]=true;if(e.key===" ")shoot();if(e.key==="r")reload()});
+addEventListener('keyup',e=>keys[e.key]=false);
+
+// Touch sticks
+const touchMove={x:0,y:0},touchLook={x:0,y:0};
+function setupStick(el,kind){
+ let active=null,cx=0,cy=0;
+ const knob=el.querySelector('.knob');
+ el.addEventListener('pointerdown',e=>{active=e.pointerId;el.setPointerCapture(active);const r=el.getBoundingClientRect();cx=r.left+r.width/2;cy=r.top+r.height/2;move(e)});
+ el.addEventListener('pointermove',e=>{if(e.pointerId===active)move(e)});
+ el.addEventListener('pointerup',e=>{if(e.pointerId===active){active=null;knob.style.transform='translate(0,0)';if(kind==="move"){touchMove.x=touchMove.y=0}else touchLook.x=touchLook.y=0}});
+ function move(e){let dx=e.clientX-cx,dy=e.clientY-cy;const max=42,l=Math.hypot(dx,dy);if(l>max){dx=dx/l*max;dy=dy/l*max}knob.style.transform=`translate(${dx}px,${dy}px)`;if(kind==="move"){touchMove.x=dx/max;touchMove.y=dy/max}else{touchLook.x=dx/max;touchLook.y=dy/max}}
+}
+setupStick(document.getElementById('leftStick'),'move');setupStick(document.getElementById('rightStick'),'look');
+document.getElementById('rightStick').addEventListener('pointermove',e=>{});
+setInterval(()=>{if(touchLook.x||touchLook.y){player.a+=touchLook.x*.09}},16);
+const fire=document.getElementById('fire');fire.onpointerdown=()=>firing=true;fire.onpointerup=fire.onpointercancel=()=>firing=false;
+document.getElementById('reload').onclick=reload;
+document.getElementById('jump').onclick=()=>{ /* sprint button: temporary speed isn't needed */ };
+document.getElementById('play').onclick=()=>{document.getElementById('start').style.display='none';document.querySelectorAll('.stick').forEach(x=>x.style.display='block');running=true;resetRound()};
+resetRound();
+</script>
+</body>
+</html>
